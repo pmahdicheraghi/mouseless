@@ -1,0 +1,111 @@
+# Full example config of mouseless for Windows.
+# The config format is the same as for the original (Linux) mouseless: https://github.com/jbensmann/mouseless
+# Run `mouseless --debug` to see the names of the keys you press, or `mouseless --list-keys` for all names.
+
+# not supported on Windows (a keyboard hook always receives the events of all keyboards)
+# devices:
+# devicesExclude:
+
+# in case one wants to run multiple instances of mouseless, they must have different instanceNames
+# instanceName: "mouseless"
+
+# this is executed (with cmd.exe) when mouseless starts
+# startCommand: "echo started"
+
+# the rate at which the mouse pointer moves (in ms)
+mouseLoopInterval: 10
+
+# the default speed for mouse movement and scrolling
+baseMouseSpeed: 750.0
+baseScrollSpeed: 20.0
+
+# the time it takes to accelerate to baseMouseSpeed (in ms), 0 to reach top speed immediately
+mouseAccelerationTime: 200.0
+# the shape of the acceleration curve, 1.0 is linear, higher values have more time at low speeds
+mouseAccelerationCurve: 2.0
+# speed of the mouse when it starts moving
+startMouseSpeed: 0.0
+# same for deceleration
+mouseDecelerationTime: 300.0
+mouseDecelerationCurve: 3.0
+
+# enables auto-repeat of a tap key when pressed twice within this duration
+quickTapTime: 150
+# two keys must be pressed within this duration to activate a combo (e.g. f+d)
+comboTime: 25
+
+# the rest of the config defines the layers with their bindings
+layers:
+# the first layer is active at start
+- name: initial
+  bindings:
+    # when tab is held and another key pressed, activate mouse layer
+    tab: tap-hold-next tab ; toggle-layer mouse ; 500
+    # when a is held for 300ms, activate mouse layer
+    a: tap-hold a ; toggle-layer mouse ; 300
+    # right alt key toggles arrows layer
+    rightalt: toggle-layer arrows
+    # switch escape with capslock
+    esc: capslock
+    capslock: esc
+    # key combos are activated when both keys are pressed simultaneously
+    f+d: layer mouse
+    # map ctrl+h/j/k/l to arrow keys
+    leftctrl: mod-layer leftctrl vim-arrows
+    # when tapped, shift is applied to the next key press, when tapped twice it stays active until tapped again
+    leftshift: one-shot leftshift
+    # one-shot can be combined with tap-hold, here a tap results in a one-shot shift, holding it toggles the arrows layer
+    rightctrl: tap-hold one-shot leftshift ; toggle-layer arrows ; 300
+# a layer for mouse movement
+- name: mouse
+  # when true, keys that are not mapped keep their original meaning
+  passThrough: true
+  # these commands are executed (with cmd.exe) when the layer is entered/exited
+  # enterCommand: "echo mouse layer entered"
+  # exitCommand: "echo mouse layer exited"
+  bindings:
+    # quit mouse layer
+    q: layer initial
+    # keep the mouse layer active
+    space: layer mouse
+    r: reload-config
+    l: move  1  0
+    j: move -1  0
+    k: move  0  1
+    i: move  0 -1
+    p: scroll up
+    n: scroll down
+    leftalt: speed 4.0
+    e: speed 0.3
+    capslock: speed 0.1
+    f: button left
+    d: button middle
+    s: button right
+    # the side buttons (Windows only)
+    b: button back
+    # click the left button repeatedly every 200ms while held down
+    a: button left 200
+    # run a command, the environment variables %key% and %key_code% contain the pressed key
+    k0: "exec start notepad.exe"
+    # exit mouseless (Windows only)
+    pause: quit
+# another layer for arrows and some other keys
+- name: arrows
+  passThrough: false
+  bindings:
+    e: up
+    s: left
+    d: down
+    f: right
+    q: esc
+    w: backspace
+    r: delete
+    v: enter
+    # _ is the wildcard key, which matches any key that is not mapped
+    _: rightalt+_
+- name: vim-arrows
+  bindings:
+    h: left
+    j: down
+    k: up
+    l: right
