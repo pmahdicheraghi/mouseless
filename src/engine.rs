@@ -91,6 +91,19 @@ impl Engine {
         self.executor = Executor::default();
     }
 
+    /// Returns the index and name of the current layer, index 0 is the initial layer.
+    pub fn current_layer_info(&self) -> (usize, &str) {
+        (self.executor.current_layer, &self.current_layer().name)
+    }
+
+    /// Releases everything that is pressed and resets the engine to its initial state, e.g. when
+    /// mouseless is paused.
+    pub fn reset(&mut self) -> Vec<Output> {
+        let outputs = self.release_all();
+        *self = Engine::new(self.config.clone());
+        outputs
+    }
+
     /// Handles a physical key press or release.
     pub fn handle_event(&mut self, event: Event) -> Vec<Output> {
         self.combo_handle(EventBinding::new(event));

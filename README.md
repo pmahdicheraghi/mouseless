@@ -8,43 +8,66 @@ All features are supported: smooth pointer movement with acceleration, speed mod
 scrolling, key remapping, layers, `tap-hold`, `tap-hold-next`, `tap-hold-next-release`, combos (`f+d`),
 `mod-layer`, `one-shot`, `multi`, `exec`, `exec-press-release`, `reload-config` and `nop`.
 
-## Build
+## Install
 
-```
-cargo build --release
-```
+Download or build `mouseless-setup-<version>.exe` (see below) and run it. The installer:
 
-The binary is `target\release\mouseless.exe`. It has no runtime dependencies.
+- installs mouseless to `C:\Program Files\mouseless` and adds it to the Start menu
+- optionally starts it automatically at login **with administrator rights**, so that it also works
+  while an admin window (e.g. Task Manager or an admin terminal) is focused; Windows doesn't send key
+  events to normal programs then
+- stops a running mouseless before an update, and removes the autostart when uninstalling
 
-## Usage
+Your config (`%APPDATA%\mouseless\config.yaml`) is created on the first start and is kept on uninstall.
 
-```
-mouseless.exe                     # uses %APPDATA%\mouseless\config.yaml (created on first start)
-mouseless.exe --config my.yaml    # use another config file
-mouseless.exe --debug             # show the names of the keys you press, useful for writing a config
-mouseless.exe --list-keys         # list all key names
-mouseless.exe --check             # only validate the config
-mouseless.exe --hidden            # run in the background without a console window
-```
+## The tray icon
 
-Stop it with `Ctrl+C` in its console, with a key bound to the `quit` action, or in the Task Manager if it
-runs hidden.
+mouseless runs in the background with an icon in the notification area. The icon shows the state:
+dark when the first layer is active, **blue** when another layer (e.g. the mouse layer) is active, and
+gray when paused. Click it for the menu:
+
+- **Enabled**: pause mouseless; while paused all keys work normally
+- **Reload config** after you've edited it, or **Edit config** to open it
+- **Open log**: the log file `%LOCALAPPDATA%\mouseless\mouseless.log`
+- **Start at login (as administrator)**: creates or removes the scheduled task that starts mouseless
+  at login, which asks for administrator rights once
+- **Exit**
 
 With the default config, hold `a` (or hold `tab` and press another key) to activate the mouse layer:
 `i`/`j`/`k`/`l` move the pointer, `f`/`d`/`s` are the left/middle/right buttons, `p`/`n` scroll, and
 `leftalt`, `e` and `capslock` change the speed. `esc` or `q` leaves a layer you switched to with `layer`.
 See [examples/config_full.yaml](examples/config_full.yaml) for every option.
 
-### Start automatically at login
+## Command line
 
-Press `Win+R`, enter `shell:startup`, and create a shortcut to `mouseless.exe` there. In its properties,
-set the target to `"C:\path\to\mouseless.exe" --hidden`.
+```
+mouseless                       # uses %APPDATA%\mouseless\config.yaml (created on first start)
+mouseless --config my.yaml      # use another config file
+mouseless --debug               # show the names of the keys you press, useful for writing a config
+mouseless --list-keys           # list all key names
+mouseless --check               # only validate the config
+mouseless --quit                # stop the running mouseless
+mouseless --enable-autostart    # start at login as administrator (--disable-autostart to undo)
+mouseless --no-tray             # run without the tray icon
+```
 
-### Admin windows
+When started from a terminal, mouseless prints its log there and stops with `Ctrl+C` or when the
+terminal is closed. Started from the Start menu, it runs in the background and logs to
+`%LOCALAPPDATA%\mouseless\mouseless.log`.
 
-Windows doesn't send keyboard events to a program without admin rights while an elevated window
-(e.g. Task Manager or an admin terminal) is focused. To use mouseless in those windows too, run it as
-administrator, for example with a Task Scheduler task with "Run with highest privileges" enabled.
+Running as administrator also means that the commands in your config (`exec`, `startCommand`, ...)
+run as administrator, so keep the config file only writable by you.
+
+## Build
+
+```
+cargo build --release              # target\release\mouseless.exe, no runtime dependencies
+.\installer\build.ps1              # target\installer\mouseless-setup-<version>.exe
+```
+
+The installer needs [Inno Setup 6](https://jrsoftware.org/isinfo.php)
+(`winget install JRSoftware.InnoSetup`). The icons are generated with `python assets/make_icons.py`
+(requires Pillow); the results are committed, so this is only needed to change them.
 
 ## Differences from the Linux version
 

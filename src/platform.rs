@@ -8,6 +8,8 @@
 //! - the timer thread drives the time based parts of the engine (tap-hold and combo timeouts,
 //!   mouse movement, repeated clicks)
 //!
+//! The main thread also owns the hidden window with the tray icon (see `tray.rs`).
+//!
 //! The engine is protected by a mutex that is only held for short amounts of time, since Windows
 //! removes keyboard hooks that take too long.
 
@@ -19,16 +21,14 @@ use std::collections::HashSet;
 use std::os::windows::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 use std::sync::{Condvar, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
 
-use windows_sys::Win32::Foundation::{GetLastError, ERROR_ALREADY_EXISTS, HANDLE, LPARAM, LRESULT, POINT, WPARAM};
+use windows_sys::Win32::Foundation::{GetLastError, ERROR_ALREADY_EXISTS, HANDLE, HWND, LPARAM, LRESULT, POINT, WPARAM};
 use windows_sys::Win32::Media::{timeBeginPeriod, timeEndPeriod};
 use windows_sys::Win32::System::Console::{
-    FreeConsole, GetConsoleMode, GetConsoleProcessList, GetStdHandle, SetConsoleCtrlHandler, SetConsoleMode,
-    CTRL_CLOSE_EVENT, CTRL_LOGOFF_EVENT, CTRL_SHUTDOWN_EVENT, ENABLE_EXTENDED_FLAGS, ENABLE_QUICK_EDIT_MODE,
-    STD_INPUT_HANDLE,
+    SetConsoleCtrlHandler, CTRL_CLOSE_EVENT, CTRL_LOGOFF_EVENT, CTRL_SHUTDOWN_EVENT,
 };
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::System::Threading::{CreateMutexW, GetCurrentThreadId, CREATE_NO_WINDOW};
@@ -40,10 +40,10 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     MOUSEEVENTF_VIRTUALDESK, MOUSEEVENTF_WHEEL, MOUSEEVENTF_XDOWN, MOUSEEVENTF_XUP, MOUSEINPUT,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CallNextHookEx, DispatchMessageW, GetCursorPos, GetMessageW, GetSystemMetrics, PostThreadMessageW,
+    CallNextHookEx, DispatchMessageW, GetCursorPos, GetMessageW, GetSystemMetrics, PostMessageW, PostThreadMessageW,
     SetWindowsHookExW, TranslateMessage, UnhookWindowsHookEx, HC_ACTION, KBDLLHOOKSTRUCT, LLKHF_EXTENDED,
     LLKHF_INJECTED, MSG, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN,
-    WH_KEYBOARD_LL, WM_KEYDOWN, WM_QUIT, WM_SYSKEYDOWN, XBUTTON1, XBUTTON2,
+    WH_KEYBOARD_LL, WM_CLOSE, WM_KEYDOWN, WM_QUIT, WM_SYSKEYDOWN, XBUTTON1, XBUTTON2,
 };
 
 /// Marks the input events created by mouseless.
@@ -61,10 +61,17 @@ struct State {
     engine: Engine,
     /// the physical keys that are currently held down, used to detect auto-repeat
     physically_pressed: HashSet<u16>,
+    /// false while mouseless is paused (all keys are passed through)
+    enabled: bool,
+    /// the layer that was active after the last event, to detect layer changes
+    last_layer: usize,
     quitting: bool,
 }
 
 static SHARED: OnceLock<Shared> = OnceLock::new();
+
+/// The hidden window, which is informed about state changes (to update the tray icon).
+static WINDOW: AtomicPtr<core::ffi::c_void> = AtomicPtr::new(std::ptr::null_mut());
 
 /// Whether key events injected by other programs are processed as well (e.g. from remote desktop
 /// tools or on-screen keyboards). The events created by mouseless itself are always ignored.
@@ -80,8 +87,8 @@ impl Shared {
     }
 }
 
-/// Runs mouseless until it is stopped (Ctrl+C, the quit action, or closing the console).
-pub fn run(config_path: PathBuf, config: Config, hidden: bool) -> Result<(), String> {
+/// Runs mouseless until it is stopped (Ctrl+C, the quit action, the tray menu, or `mouseless --quit`).
+pub fn run(config_path: PathBuf, config: Config, show_tray: bool) -> Result<(), String> {
     let instance_name = if config.instance_name.is_empty() { "mouseless" } else { &config.instance_name };
     ensure_single_instance(instance_name)?;
 
@@ -106,7 +113,13 @@ pub fn run(config_path: PathBuf, config: Config, hidden: bool) -> Result<(), Str
 
     let first_layer = config.layers[0].name.clone();
     let shared = Shared {
-        state: Mutex::new(State { engine: Engine::new(config), physically_pressed: HashSet::new(), quitting: false }),
+        state: Mutex::new(State {
+            engine: Engine::new(config),
+            physically_pressed: HashSet::new(),
+            enabled: true,
+            last_layer: 0,
+            quitting: false,
+        }),
         wakeup: Condvar::new(),
         main_thread_id: unsafe { GetCurrentThreadId() },
         config_path,
@@ -116,26 +129,26 @@ pub fn run(config_path: PathBuf, config: Config, hidden: bool) -> Result<(), Str
     }
     let shared = SHARED.get().expect("just set");
 
+    // Ctrl+C when started from a terminal
     unsafe {
         SetConsoleCtrlHandler(Some(console_ctrl_handler), 1);
     }
-    disable_console_quick_edit();
 
     let timer_thread = std::thread::Builder::new()
         .name("timer".into())
         .spawn(timer_loop)
         .map_err(|e| format!("failed to start the timer thread: {e}"))?;
 
+    let hwnd = crate::tray::create(show_tray)?;
+    WINDOW.store(hwnd, Ordering::Relaxed);
+
     let hook = unsafe { SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard_hook), GetModuleHandleW(std::ptr::null()), 0) };
     if hook.is_null() {
         return Err(format!("failed to install the keyboard hook (error {})", unsafe { GetLastError() }));
     }
 
-    info!("mouseless is running (layer '{first_layer}'), press Ctrl+C to exit");
-    if hidden {
-        crate::logger::flush();
-        unsafe { FreeConsole() };
-    }
+    let admin = if crate::autostart::is_elevated() { " as administrator" } else { "" };
+    info!("mouseless is running{admin} (layer '{first_layer}')");
 
     // the message loop, which is required for the keyboard hook
     unsafe {
@@ -146,6 +159,8 @@ pub fn run(config_path: PathBuf, config: Config, hidden: bool) -> Result<(), Str
         }
         UnhookWindowsHookEx(hook);
     }
+    WINDOW.store(std::ptr::null_mut(), Ordering::Relaxed);
+    crate::tray::destroy();
 
     // release everything that is still pressed, so that no key gets stuck
     {
@@ -168,10 +183,9 @@ fn ensure_single_instance(instance_name: &str) -> Result<(), String> {
         return Err(format!("failed to create the instance mutex (error {})", unsafe { GetLastError() }));
     }
     if unsafe { GetLastError() } == ERROR_ALREADY_EXISTS {
-        return Err(format!(
-            "another instance of mouseless with the name '{instance_name}' is already running \
-             (if you want to run multiple instances, change the instanceName in the config)"
-        ));
+        return Err("mouseless is already running (see the tray icon). If you want to run multiple instances, \
+                    give them different instanceNames in the config."
+            .into());
     }
     // the handle is intentionally leaked, the mutex lives as long as the process
     Ok(())
@@ -212,7 +226,7 @@ fn handle_key(info: &KBDLLHOOKSTRUCT, is_down: bool) -> bool {
     let Some(shared) = SHARED.get() else { return false };
 
     let mut state = shared.lock();
-    if state.quitting {
+    if state.quitting || !state.enabled {
         return false;
     }
     let outputs = if is_down {
@@ -255,8 +269,83 @@ fn after_outputs(shared: &Shared, state: &mut State) {
     if state.engine.quit_requested {
         state.engine.quit_requested = false;
         info!("Quit requested");
-        unsafe { PostThreadMessageW(shared.main_thread_id, WM_QUIT, 0, 0) };
+        request_quit(shared);
     }
+    let (layer, name) = state.engine.current_layer_info();
+    if layer != state.last_layer {
+        debug!("Layer changed to '{name}'");
+        state.last_layer = layer;
+        notify_window();
+    }
+}
+
+/// Stops mouseless: via the window if it exists (which also closes an open tray menu), otherwise by
+/// ending the message loop directly.
+fn request_quit(shared: &Shared) {
+    let hwnd: HWND = WINDOW.load(Ordering::Relaxed);
+    unsafe {
+        if hwnd.is_null() || PostMessageW(hwnd, WM_CLOSE, 0, 0) == 0 {
+            PostThreadMessageW(shared.main_thread_id, WM_QUIT, 0, 0);
+        }
+    }
+}
+
+/// Informs the window (tray icon) that the state has changed.
+fn notify_window() {
+    let hwnd: HWND = WINDOW.load(Ordering::Relaxed);
+    if !hwnd.is_null() {
+        unsafe { PostMessageW(hwnd, crate::tray::WM_STATE_CHANGED, 0, 0) };
+    }
+}
+
+fn shared() -> &'static Shared {
+    SHARED.get().expect("mouseless is running")
+}
+
+/// Returns the index and name of the current layer.
+pub fn current_layer() -> (usize, String) {
+    let state = shared().lock();
+    let (index, name) = state.engine.current_layer_info();
+    (index, name.to_string())
+}
+
+pub fn is_enabled() -> bool {
+    shared().lock().enabled
+}
+
+/// Pauses or resumes mouseless. While paused, all keys are passed through unchanged.
+pub fn set_enabled(enabled: bool) {
+    let shared = shared();
+    let mut state = shared.lock();
+    if state.enabled == enabled {
+        return;
+    }
+    info!("{}", if enabled { "Enabled" } else { "Paused" });
+    state.enabled = enabled;
+    if !enabled {
+        let outputs = state.engine.reset();
+        send_outputs(&outputs);
+        // releases of keys that are held now are passed through
+        state.physically_pressed.clear();
+    }
+    state.last_layer = state.engine.current_layer_info().0;
+    drop(state);
+    shared.wakeup.notify_all();
+    notify_window();
+}
+
+/// Reloads the config file.
+pub fn request_reload() {
+    let shared = shared();
+    let mut state = shared.lock();
+    state.engine.reload_requested = true;
+    after_outputs(shared, &mut state);
+    drop(state);
+    shared.wakeup.notify_all();
+}
+
+pub fn config_path() -> PathBuf {
+    shared().config_path.clone()
 }
 
 /// Executes the timeouts and mouse movements of the engine.
@@ -288,7 +377,7 @@ fn timer_loop() {
 
 unsafe extern "system" fn console_ctrl_handler(ctrl_type: u32) -> windows_sys::core::BOOL {
     if let Some(shared) = SHARED.get() {
-        unsafe { PostThreadMessageW(shared.main_thread_id, WM_QUIT, 0, 0) };
+        request_quit(shared);
         if matches!(ctrl_type, CTRL_CLOSE_EVENT | CTRL_LOGOFF_EVENT | CTRL_SHUTDOWN_EVENT) {
             // the process is terminated when this function returns, so give the main thread some
             // time to release all keys
@@ -296,26 +385,6 @@ unsafe extern "system" fn console_ctrl_handler(ctrl_type: u32) -> windows_sys::c
         }
     }
     1
-}
-
-/// Disables the quick edit mode of the console, since selecting text in the console window would
-/// pause the program.
-fn disable_console_quick_edit() {
-    unsafe {
-        let handle = GetStdHandle(STD_INPUT_HANDLE);
-        let mut mode = 0;
-        if GetConsoleMode(handle, &mut mode) != 0 {
-            SetConsoleMode(handle, (mode & !ENABLE_QUICK_EDIT_MODE) | ENABLE_EXTENDED_FLAGS);
-        }
-    }
-}
-
-/// Returns true if the console window was created just for this process (e.g. when started by a
-/// double click in the explorer), in which case it closes as soon as the process exits.
-pub fn has_own_console() -> bool {
-    let mut list = [0u32; 4];
-    let count = unsafe { GetConsoleProcessList(list.as_mut_ptr(), list.len() as u32) };
-    count == 1
 }
 
 // -------------------------------------------------------------------------------------------------

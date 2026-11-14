@@ -355,6 +355,21 @@ fn release_all() {
 }
 
 #[test]
+fn reset_releases_and_stops_everything() {
+    let config = "layers:\n- name: 1\n  bindings:\n    t: toggle-layer 2\n    l: move 1 0\n- name: 2\n";
+    let mut engine = Engine::new(parse_config(config).unwrap());
+    let t = Instant::now();
+    engine.handle_event(Event { code: parse_key("l").unwrap(), is_press: true, time: t });
+    engine.handle_event(Event { code: parse_key("x").unwrap(), is_press: true, time: t });
+    engine.handle_event(Event { code: parse_key("t").unwrap(), is_press: true, time: t });
+    assert_eq!(engine.current_layer_info(), (1, "2"));
+    let outs = engine.reset();
+    assert_eq!(outs, vec![Output::Key { code: parse_key("x").unwrap(), down: false }]);
+    assert_eq!(engine.current_layer_info(), (0, "1"));
+    assert_eq!(engine.next_deadline(), None);
+}
+
+#[test]
 fn move_towards_accelerates() {
     // linear acceleration from 0 to 10 in 4 steps
     let mut v = 0.0;

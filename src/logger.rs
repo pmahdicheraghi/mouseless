@@ -5,6 +5,7 @@
 
 use std::fs::File;
 use std::io::Write;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, sync_channel, Sender, SyncSender};
 use std::sync::{Mutex, OnceLock};
@@ -12,6 +13,7 @@ use std::time::Duration;
 
 static DEBUG: AtomicBool = AtomicBool::new(false);
 static LOG_FILE: Mutex<Option<File>> = Mutex::new(None);
+static LOG_PATH: OnceLock<PathBuf> = OnceLock::new();
 static WRITER: OnceLock<Mutex<Sender<Message>>> = OnceLock::new();
 
 enum Message {
@@ -56,8 +58,14 @@ pub fn debug_enabled() -> bool {
     DEBUG.load(Ordering::Relaxed)
 }
 
-pub fn set_log_file(file: File) {
+pub fn set_log_file(file: File, path: PathBuf) {
     *LOG_FILE.lock().unwrap_or_else(|e| e.into_inner()) = Some(file);
+    let _ = LOG_PATH.set(path);
+}
+
+/// Returns the log file, if the log is written to a file.
+pub fn log_file_path() -> Option<PathBuf> {
+    LOG_PATH.get().cloned()
 }
 
 pub fn log(level: &str, msg: std::fmt::Arguments) {
