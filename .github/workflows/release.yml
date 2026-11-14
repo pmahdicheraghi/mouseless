@@ -1,0 +1,79 @@
+# Builds mouseless and publishes a GitHub release when a version tag is pushed:
+#   git tag v0.2.0 && git push origin v0.2.0
+# The tag must match the version in Cargo.toml.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check that the tag matches the version in Cargo.toml
+        shell: pwsh
+        run: |
+          $version = (Select-String -Path Cargo.toml -Pattern '^version\s*=\s*"(.+)"').Matches[0].Groups[1].Value
+          if ("v$version" -ne "${{ github.ref_name }}") {
+            throw "Tag ${{ github.ref_name }} does not match the version $version in Cargo.toml"
+          }
+          "VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Install Rust
+        run: rustup toolchain install stable --profile minimal && rustup default stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Run tests
+        run: cargo test
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) {
+            choco install innosetup -y --no-progress
+          }
+
+      - name: Build the executable and the installer
+        shell: pwsh
+        run: .\installer\build.ps1
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $dist = "dist"
+          New-Item -ItemType Directory -Force "$dist\mouseless\examples" | Out-Null
+          Copy-Item target\release\mouseless.exe, README.md "$dist\mouseless\"
+          Copy-Item LICENSE "$dist\mouseless\LICENSE.txt"
+          Copy-Item examples\*.yaml "$dist\mouseless\examples\"
+          Compress-Archive -Path "$dist\mouseless\*" -DestinationPath "$dist\mouseless-$env:VERSION-portable.zip"
+          Copy-Item "target\installer\mouseless-setup-$env:VERSION.exe" $dist
+          $files = @(Get-ChildItem $dist -File)
+          $sums = $files | ForEach-Object { "$((Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower())  $($_.Name)" }
+          $sums | Out-File -Encoding ascii "$dist\SHA256SUMS.txt"
+          Get-Content "$dist\SHA256SUMS.txt"
+
+      - name: Publish the release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: mouseless ${{ env.VERSION }}
+          generate_release_notes: true
+          body: |
+            Control the mouse with the keyboard on Windows, a port of [mouseless](https://github.com/jbensmann/mouseless).
+
+            **Downloads**
+            - `mouseless-setup-${{ env.VERSION }}.exe`: installer (recommended), optionally starts mouseless at login with administrator rights
+            - `mouseless-${{ env.VERSION }}-portable.zip`: just the executable, no installation
+
+            The files are not code-signed, so Windows SmartScreen may warn when you start them ("More info" → "Run anyway").
+            See the [README](https://github.com/${{ github.repository }}#readme) for usage and configuration.
+          files: |
+            dist/mouseless-setup-${{ env.VERSION }}.exe
+            dist/mouseless-${{ env.VERSION }}-portable.zip
+            dist/SHA256SUMS.txt
