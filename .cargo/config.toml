@@ -1,0 +1,4 @@
+# Link the C runtime statically, so that mouseless.exe does not need the Visual C++ Redistributable
+# (VCRUNTIME140.dll), which is missing on many computers.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

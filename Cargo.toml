@@ -1,6 +1,6 @@
 [package]
 name = "mouseless"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 description = "Control the mouse with the keyboard on Windows - a port of mouseless (https://github.com/jbensmann/mouseless)"
 license = "MIT"
