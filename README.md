@@ -81,6 +81,15 @@ The installer needs [Inno Setup 6](https://jrsoftware.org/isinfo.php)
   loop. Pass `--process-injected` to handle them as well, e.g. for remote desktop or on-screen keyboards.
 - **Pointer acceleration:** none. The pointer is positioned absolutely, so Windows' "Enhance pointer
   precision" setting doesn't affect it.
+- **Long range acceleration:** with `mouseMaxSpeed`, a movement key held longer smoothly speeds the
+  pointer up beyond `baseMouseSpeed`: after `mouseAccelerationTime` plus `mouseMaxSpeedDelay`
+  (default 300 ms) it rises to `mouseMaxSpeed` within `mouseMaxSpeedTime` (default 1000 ms), along
+  an ease-in-out curve. Short moves are unaffected. Reversing or turning more than 60° starts at the
+  normal speed again. A slow `speed` key (below 1) switches the extra speed off for precise
+  positioning, and a fast one doesn't add to it.
+- **Display scaling:** `baseMouseSpeed` is in logical pixels per second, so the pointer moves equally
+  fast on all displays. On a display with 150% scaling, it moves 1.5 times as many physical pixels.
+  With several monitors, the scaling of the monitor under the pointer is used.
 - **Key names:** names refer to physical key positions (based on scan codes), like on Linux, so `a` is
   always the key next to `capslock`, whatever your keyboard layout.
 

@@ -32,7 +32,10 @@ use windows_sys::Win32::System::Console::{
 };
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::System::Threading::{CreateMutexW, GetCurrentThreadId, CREATE_NO_WINDOW};
-use windows_sys::Win32::UI::HiDpi::{SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2};
+use windows_sys::Win32::Graphics::Gdi::{MonitorFromPoint, MONITOR_DEFAULTTONEAREST};
+use windows_sys::Win32::UI::HiDpi::{
+    GetDpiForMonitor, SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, MDT_EFFECTIVE_DPI,
+};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBDINPUT, KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP,
     KEYEVENTF_SCANCODE, MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_HWHEEL, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP,
@@ -358,6 +361,8 @@ fn timer_loop() {
         }
         let now = Instant::now();
         if state.engine.next_deadline().is_some_and(|d| d <= now) {
+            // the display under the pointer may have changed since the last tick
+            state.engine.set_pointer_scale(pointer_scale());
             let outputs = state.engine.on_timer(now);
             send_outputs(&outputs);
             after_outputs(shared, &mut state);
@@ -474,6 +479,21 @@ fn mouse_input(dx: i32, dy: i32, data: u32, flags: u32) -> INPUT {
         Anonymous: INPUT_0 {
             mi: MOUSEINPUT { dx, dy, mouseData: data, dwFlags: flags, time: 0, dwExtraInfo: INJECTED_TAG },
         },
+    }
+}
+
+/// Returns the display scaling of the monitor under the pointer, e.g. 1.5 for 150%.
+fn pointer_scale() -> f64 {
+    let mut dpi_x = 0;
+    let mut dpi_y = 0;
+    let ok = unsafe {
+        let monitor = MonitorFromPoint(cursor_position(), MONITOR_DEFAULTTONEAREST);
+        GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &mut dpi_x, &mut dpi_y) >= 0
+    };
+    if ok && dpi_x > 0 {
+        dpi_x as f64 / 96.0
+    } else {
+        1.0
     }
 }
 

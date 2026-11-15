@@ -15,7 +15,7 @@
 # the rate at which the mouse pointer moves (in ms)
 mouseLoopInterval: 10
 
-# the default speed for mouse movement and scrolling
+# the default speed for mouse movement (pixels per second, adjusted to the display scaling) and scrolling
 baseMouseSpeed: 750.0
 baseScrollSpeed: 20.0
 
@@ -28,6 +28,15 @@ startMouseSpeed: 0.0
 # same for deceleration
 mouseDecelerationTime: 300.0
 mouseDecelerationCurve: 3.0
+
+# long range acceleration (Windows only): when a movement key is held longer, the pointer smoothly
+# speeds up further from baseMouseSpeed to mouseMaxSpeed, which makes long distances faster;
+# leave out mouseMaxSpeed (or set it to 0) to disable it
+mouseMaxSpeed: 3000.0
+# how long the pointer moves at baseMouseSpeed before it speeds up further (in ms)
+mouseMaxSpeedDelay: 300.0
+# the time it takes to speed up from baseMouseSpeed to mouseMaxSpeed (in ms)
+mouseMaxSpeedTime: 1000.0
 
 # enables auto-repeat of a tap key when pressed twice within this duration
 quickTapTime: 150

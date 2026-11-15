@@ -344,6 +344,25 @@ layers:
 }
 
 #[test]
+fn movement_is_scaled_with_the_display_scaling() {
+    let config = "baseMouseSpeed: 1000\nmouseLoopInterval: 10\nlayers:\n- name: 1\n  bindings:\n    l: move 1 0\n";
+    let distance = |scale: f64| {
+        let mut engine = Engine::new(parse_config(config).unwrap());
+        engine.set_pointer_scale(scale);
+        let t0 = Instant::now();
+        engine.handle_event(Event { code: parse_key("l").unwrap(), is_press: true, time: t0 });
+        // the first tick moves for one loop interval (10ms at 1000px/s = 10px)
+        match engine.on_timer(t0).as_slice() {
+            [Output::MouseMove { dx, dy: 0 }] => *dx,
+            o => panic!("unexpected outputs {o:?}"),
+        }
+    };
+    assert_eq!(distance(1.0), 10);
+    assert_eq!(distance(1.5), 15);
+    assert_eq!(distance(2.0), 20);
+}
+
+#[test]
 fn release_all() {
     let mut engine = Engine::new(parse_config("layers:\n- name: 1\n  bindings:\n    m: button left\n").unwrap());
     let t = Instant::now();
@@ -382,4 +401,74 @@ fn move_towards_accelerates() {
     // deceleration
     assert_eq!(move_towards(10.0, 0.0, 10.0, 0.0, 1.0, 0.25, 1.0, 0.5), 5.0);
     assert_eq!(move_towards(-10.0, 0.0, 10.0, 0.0, 1.0, 0.25, 1.0, 0.5), -5.0);
+}
+
+/// Simulates the mouse loop for long range acceleration tests. `script` is a list of
+/// (time in ms, key, pressed); returns the speed (px/s) of the given axis in 250ms windows.
+fn simulate_speeds(extra_config: &str, script: &[(u64, &str, bool)], until_ms: u64, axis_x: bool) -> Vec<i64> {
+    let config = format!(
+        "baseMouseSpeed: 750\nmouseAccelerationTime: 200\nmouseAccelerationCurve: 2.0\nmouseLoopInterval: 10\n\
+         {extra_config}\n\
+         layers:\n- name: 1\n  bindings:\n    l: move 1 0\n    j: move -1 0\n    k: move 0 1\n    e: speed 0.3\n"
+    );
+    let mut engine = Engine::new(parse_config(&config).unwrap());
+    let t0 = Instant::now();
+    let (mut speeds, mut window) = (Vec::new(), 0i64);
+    for ms in (0..=until_ms).step_by(10) {
+        let time = t0 + Duration::from_millis(ms);
+        for &(at, key, is_press) in script {
+            if at == ms {
+                engine.handle_event(Event { code: parse_key(key).unwrap(), is_press, time });
+            }
+        }
+        for o in engine.on_timer(time) {
+            if let Output::MouseMove { dx, dy } = o {
+                window += if axis_x { dx as i64 } else { dy as i64 };
+            }
+        }
+        if ms % 250 == 240 {
+            speeds.push(window * 4);
+            window = 0;
+        }
+    }
+    speeds
+}
+
+#[test]
+fn long_range_acceleration_reaches_max_speed_smoothly() {
+    let boosted = simulate_speeds("mouseMaxSpeed: 3000", &[(0, "l", true)], 3000, true);
+    let normal = simulate_speeds("", &[(0, "l", true)], 3000, true);
+    // short moves are not affected
+    assert_eq!(boosted[..2], normal[..2]);
+    // without it, the speed stays at the base speed
+    assert!(normal[4..].iter().all(|&s| (700..=800).contains(&s)), "{normal:?}");
+    // it rises monotonically up to the max speed, without big jumps
+    assert!(boosted.windows(2).all(|w| w[1] >= w[0] - 20), "{boosted:?}");
+    assert!(boosted.windows(2).all(|w| w[1] - w[0] < 1100), "{boosted:?}");
+    assert!((2950..=3050).contains(boosted.last().unwrap()), "{boosted:?}");
+}
+
+#[test]
+fn long_range_acceleration_is_disabled_by_slow_keys() {
+    let speeds = simulate_speeds("mouseMaxSpeed: 3000", &[(0, "l", true), (0, "e", true)], 3000, true);
+    assert!(speeds[4..].iter().all(|&s| (200..=250).contains(&s)), "{speeds:?}");
+}
+
+#[test]
+fn long_range_acceleration_restarts_after_reversing() {
+    // fast to the right, then reverse to the left
+    let script = [(0, "l", true), (2000, "l", false), (2000, "j", true)];
+    let speeds = simulate_speeds("mouseMaxSpeed: 3000", &script, 3000, true);
+    assert!(speeds[7] > 2900, "{speeds:?}");
+    // after reversing, it moves left at the normal speed (and speeds up again if held long enough)
+    assert!(speeds[8..10].iter().all(|&s| (-800..0).contains(&s)), "{speeds:?}");
+}
+
+#[test]
+fn long_range_acceleration_keeps_speed_for_diagonals() {
+    // fast to the right, then down is added for a diagonal: the vertical movement starts with the
+    // normal short acceleration, but then continues at the high speed
+    let script = [(0, "l", true), (2000, "k", true)];
+    let speeds = simulate_speeds("mouseMaxSpeed: 3000", &script, 2500, false);
+    assert!(speeds[9] > 2900, "{speeds:?}");
 }

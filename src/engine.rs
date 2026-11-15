@@ -96,6 +96,12 @@ impl Engine {
         (self.executor.current_layer, &self.current_layer().name)
     }
 
+    /// Sets the display scaling at the pointer position (e.g. 1.5 for 150%), the mouse movement is
+    /// multiplied by it.
+    pub fn set_pointer_scale(&mut self, scale: f64) {
+        self.mouse.pointer_scale = if scale.is_finite() { scale.clamp(0.25, 8.0) } else { 1.0 };
+    }
+
     /// Releases everything that is pressed and resets the engine to its initial state, e.g. when
     /// mouseless is paused.
     pub fn reset(&mut self) -> Vec<Output> {
@@ -894,6 +900,20 @@ struct VirtualMouse {
     velocity: Vector,
     move_fraction: Vector,
     scroll_fraction: Vector,
+    /// physical pixels per logical pixel at the pointer position, i.e. the display scaling (2.0 for 200%);
+    /// the speeds are in logical pixels, so that the pointer moves equally fast on all displays
+    pointer_scale: f64,
+
+    // long range acceleration (Windows only extension), see `boost_at`
+    max_mouse_speed: f64,
+    max_speed_delay: f64,
+    max_speed_time: f64,
+    /// how long (in ms) the pointer has been moved in roughly the same direction
+    held_time: f64,
+    /// the direction of the last movement (normalized)
+    held_direction: Vector,
+    /// the current speed multiplier of the long range acceleration
+    boost: f64,
 
     /// when the mouse loop runs next, None if it is idle
     next_tick: Option<Instant>,
@@ -920,6 +940,13 @@ impl VirtualMouse {
             velocity: Vector::default(),
             move_fraction: Vector::default(),
             scroll_fraction: Vector::default(),
+            pointer_scale: 1.0,
+            max_mouse_speed: 0.0,
+            max_speed_delay: 0.0,
+            max_speed_time: 0.0,
+            held_time: 0.0,
+            held_direction: Vector::default(),
+            boost: 1.0,
             next_tick: None,
             last_update: Instant::now(),
         };
@@ -936,6 +963,50 @@ impl VirtualMouse {
         self.deceleration_time = c.mouse_deceleration_time;
         self.acceleration_curve = c.mouse_acceleration_curve;
         self.deceleration_curve = c.mouse_deceleration_curve;
+        self.max_mouse_speed = c.mouse_max_speed;
+        self.max_speed_delay = c.mouse_max_speed_delay;
+        self.max_speed_time = c.mouse_max_speed_time;
+    }
+
+    /// The speed multiplier of the long range acceleration after the pointer has been moved for
+    /// `held_time` ms: 1 until the normal acceleration is done plus `max_speed_delay`, then it rises
+    /// to `max_mouse_speed / base_mouse_speed` within `max_speed_time`.
+    ///
+    /// The rise follows the smootherstep curve 6x^5 - 15x^4 + 10x^3, whose first and second derivatives
+    /// are 0 at both ends, so the pointer speeds up without a noticeable jolt at the start or the end.
+    fn boost_at(&self, held_time: f64) -> f64 {
+        if self.base_mouse_speed <= 0.0 || self.max_mouse_speed <= self.base_mouse_speed {
+            return 1.0;
+        }
+        let start = self.acceleration_time.max(0.0) + self.max_speed_delay.max(0.0);
+        let x = ((held_time - start) / self.max_speed_time.max(1.0)).clamp(0.0, 1.0);
+        let smooth = x * x * x * (x * (x * 6.0 - 15.0) + 10.0);
+        1.0 + (self.max_mouse_speed / self.base_mouse_speed - 1.0) * smooth
+    }
+
+    /// Updates the long range acceleration for a tick of `dt` ms with the movement direction `mv`, and
+    /// returns its speed multiplier.
+    fn update_boost(&mut self, mv: Vector, dt: f64) -> f64 {
+        let len = mv.x.hypot(mv.y);
+        if len == 0.0 {
+            // no movement key is held: keep the speed while decelerating, start again once stopped
+            if !self.is_moving() {
+                self.held_time = 0.0;
+                self.boost = 1.0;
+            }
+            return self.boost;
+        }
+        let dir = Vector { x: mv.x / len, y: mv.y / len };
+        // a change of direction by more than 60 degrees (e.g. reversing after overshooting) starts at
+        // the normal speed again, while e.g. adding a second key for a diagonal keeps the speed
+        let same_direction = dir.x * self.held_direction.x + dir.y * self.held_direction.y >= 0.5;
+        if !same_direction {
+            self.held_time = 0.0;
+        }
+        self.held_direction = dir;
+        self.held_time += dt;
+        self.boost = self.boost_at(self.held_time);
+        self.boost
     }
 
     fn next_deadline(&self) -> Option<Instant> {
@@ -1045,6 +1116,10 @@ impl VirtualMouse {
 
         if !self.move_by_keys.is_empty() || !self.scroll_by_keys.is_empty() || self.is_moving() {
             let tick_time = update_duration.as_secs_f64();
+            let boost = self.update_boost(mv, tick_time * 1000.0);
+            // a slow speed key (factor < 1) is meant for precision, so it disables the long range
+            // acceleration; a fast one does not add to it, the larger of both is used
+            let move_factor = if speed_factor < 1.0 { speed_factor } else { speed_factor.max(boost) };
             let move_speed = self.base_mouse_speed * tick_time;
             let scroll_speed = self.base_scroll_speed * tick_time;
             let acceleration_step = tick_time * 1000.0 / self.acceleration_time;
@@ -1057,12 +1132,14 @@ impl VirtualMouse {
                 self.base_mouse_speed * tick_time,
                 acceleration_step,
                 deceleration_step,
-                speed_factor,
+                move_factor,
                 out,
             );
             self.next_tick = Some(now + self.loop_interval);
         } else {
             self.next_tick = None;
+            self.held_time = 0.0;
+            self.boost = 1.0;
         }
     }
 
@@ -1081,8 +1158,8 @@ impl VirtualMouse {
         let (ac, dc) = (self.acceleration_curve, self.deceleration_curve);
         self.velocity.x = move_towards(self.velocity.x, x, max_speed, start_speed, ac, acceleration_step, dc, deceleration_step);
         self.velocity.y = move_towards(self.velocity.y, y, max_speed, start_speed, ac, acceleration_step, dc, deceleration_step);
-        self.move_fraction.x += self.velocity.x * speed_factor;
-        self.move_fraction.y += self.velocity.y * speed_factor;
+        self.move_fraction.x += self.velocity.x * speed_factor * self.pointer_scale;
+        self.move_fraction.y += self.velocity.y * speed_factor * self.pointer_scale;
         // move only the integer part
         let dx = self.move_fraction.x as i32;
         let dy = self.move_fraction.y as i32;

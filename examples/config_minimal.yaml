@@ -1,12 +1,15 @@
 # mouseless config (Windows port), see https://github.com/jbensmann/mouseless for all options
 # run `mouseless --debug` to see the names of the keys you press
 
-# the default speed for mouse movement and scrolling
+# the default speed for mouse movement (pixels per second, adjusted to the display scaling) and scrolling
 baseMouseSpeed: 750.0
 baseScrollSpeed: 20.0
 # the time it takes to accelerate to baseMouseSpeed (in ms)
 mouseAccelerationTime: 200.0
 mouseAccelerationCurve: 2.0
+# when a movement key is held longer, the pointer smoothly speeds up further to this speed,
+# which makes long distances faster (Windows only, remove it to disable)
+mouseMaxSpeed: 3000.0
 # the rate at which the mouse pointer moves (in ms)
 mouseLoopInterval: 10
 
